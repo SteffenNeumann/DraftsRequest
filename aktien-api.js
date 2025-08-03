@@ -7,8 +7,9 @@ function parseDraftTitel(titel) {
 	// Format: "ADS.DE/min150/max250"
 	console.log(`DEBUG: Parsing Titel = "${titel}"`);
 
-	// Entferne Leerzeichen am Anfang und Ende
-	titel = titel.trim();
+	// Entferne Leerzeichen am Anfang und Ende sowie # Zeichen
+	titel = titel.replace(/^#+\s*/, "").trim();
+	console.log(`DEBUG: Titel nach Bereinigung = "${titel}"`);
 
 	const parts = titel.split("/");
 	console.log(`DEBUG: Parts = [${parts.join(", ")}]`);
@@ -16,7 +17,7 @@ function parseDraftTitel(titel) {
 	if (parts.length !== 3) {
 		return {
 			erfolg: false,
-			fehler: `Ungültiges Titel-Format. Erwartet: "SYMBOL/minWERT/maxWERT", erhalten: "${titel}" (${parts.length} Teile statt 3)`,
+			fehler: `Ungültiges Titel-Format. Erwartet: "SYMBOL/minWERT/maxWERT", erhalten: "${titel}" (${parts.length} Teile statt 3)\n\nBeispiele:\n• ADS.DE/min150/max250\n• TSLA/min200/max300\n• SAP.DE/min120/max180`,
 		};
 	}
 
@@ -28,23 +29,31 @@ function parseDraftTitel(titel) {
 		`DEBUG: Symbol="${symbol}", MinStr="${minStr}", MaxStr="${maxStr}"`
 	);
 
-	// Extrahiere numerische Werte - flexiblere Regex
-	const minMatch = minStr.match(/min\s*(\d+(?:\.\d+)?)/i);
-	const maxMatch = maxStr.match(/max\s*(\d+(?:\.\d+)?)/i);
+	// Extrahiere numerische Werte - noch flexiblere Regex
+	const minMatch = minStr.match(/min\s*(\d+(?:[.,]\d+)?)/i);
+	const maxMatch = maxStr.match(/max\s*(\d+(?:[.,]\d+)?)/i);
 
 	console.log(`DEBUG: MinMatch=${minMatch}, MaxMatch=${maxMatch}`);
 
 	if (!minMatch || !maxMatch) {
 		return {
 			erfolg: false,
-			fehler: `Ungültiges Schwellenwert-Format. Verwenden Sie: min150/max250\nGefunden: "${minStr}" und "${maxStr}"`,
+			fehler: `Ungültiges Schwellenwert-Format.\n\nErwartet: min150/max250\nGefunden: "${minStr}" und "${maxStr}"\n\nBeispiele:\n• min150/max250\n• min 200/max 300\n• min120.5/max180.75`,
 		};
 	}
 
-	const minWert = parseFloat(minMatch[1]);
-	const maxWert = parseFloat(maxMatch[1]);
+	// Ersetze Komma durch Punkt für parseFloat
+	const minWert = parseFloat(minMatch[1].replace(",", "."));
+	const maxWert = parseFloat(maxMatch[1].replace(",", "."));
 
 	console.log(`DEBUG: MinWert=${minWert}, MaxWert=${maxWert}`);
+
+	if (isNaN(minWert) || isNaN(maxWert)) {
+		return {
+			erfolg: false,
+			fehler: `Ungültige Zahlenwerte: min=${minWert}, max=${maxWert}`,
+		};
+	}
 
 	if (minWert >= maxWert) {
 		return {
@@ -117,7 +126,15 @@ ${
 
 // Funktion zum Abrufen der Aktiendaten
 async function holeAktiendaten(aktienSymbol) {
-	const API_URL = `https://query1.finance.yahoo.com/v8/finance/chart/${aktienSymbol}`;
+	// Korrigiere das Aktien-Symbol für Yahoo Finance
+	// Deutsche Aktien benötigen oft .DE statt .de
+	let correctedSymbol = aktienSymbol.toUpperCase();
+	if (correctedSymbol === "ADS.DE") {
+		correctedSymbol = "ADS.DE"; // Adidas Deutschland
+	}
+
+	const API_URL = `https://query1.finance.yahoo.com/v8/finance/chart/${correctedSymbol}`;
+	console.log(`DEBUG: API URL = ${API_URL}`);
 
 	try {
 		// HTTP Request an Yahoo Finance API
@@ -127,23 +144,51 @@ async function holeAktiendaten(aktienSymbol) {
 			method: "GET",
 			headers: {
 				"User-Agent":
-					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+				Accept: "application/json, text/plain, */*",
+				"Accept-Language": "en-US,en;q=0.9",
+				"Cache-Control": "no-cache",
+				Pragma: "no-cache",
 			},
 		});
 
-		if (response.success) {
+		console.log(`DEBUG: Response Status = ${response.statusCode}`);
+		console.log(`DEBUG: Response Success = ${response.success}`);
+
+		if (response.success && response.statusCode === 200) {
 			let data = JSON.parse(response.responseText);
+			console.log(`DEBUG: Received data structure:`, Object.keys(data));
+
+			// Prüfe ob chart.result existiert
+			if (!data.chart || !data.chart.result || data.chart.result.length === 0) {
+				return {
+					erfolg: false,
+					fehler: `Keine Daten für Symbol ${correctedSymbol} gefunden. Prüfen Sie das Aktien-Symbol.`,
+				};
+			}
 
 			// Extrahiere relevante Daten
 			let result = data.chart.result[0];
 			let meta = result.meta;
 			let quote = result.indicators.quote[0];
 
+			console.log(`DEBUG: Meta:`, meta ? Object.keys(meta) : "undefined");
+
 			// Aktueller Kurs
 			let aktuellerKurs =
-				meta.regularMarketPrice || quote.close[quote.close.length - 1];
-			let waehrung = meta.currency;
-			let marktStatus = meta.marketState;
+				meta.regularMarketPrice ||
+				meta.previousClose ||
+				(quote.close && quote.close[quote.close.length - 1]);
+
+			if (!aktuellerKurs) {
+				return {
+					erfolg: false,
+					fehler: `Kein aktueller Kurs für ${correctedSymbol} verfügbar`,
+				};
+			}
+
+			let waehrung = meta.currency || "EUR";
+			let marktStatus = meta.marketState || "UNKNOWN";
 
 			// Zeitstempel
 			let timestamp = new Date();
@@ -158,12 +203,13 @@ async function holeAktiendaten(aktienSymbol) {
 			});
 
 			// Vorherige Schlusskurs für Veränderung
-			let vorherSchlusskurs = meta.previousClose;
+			let vorherSchlusskurs = meta.previousClose || aktuellerKurs;
 			let veraenderung = aktuellerKurs - vorherSchlusskurs;
-			let veraenderungProzent = (veraenderung / vorherSchlusskurs) * 100;
+			let veraenderungProzent =
+				vorherSchlusskurs > 0 ? (veraenderung / vorherSchlusskurs) * 100 : 0;
 
 			// Formatiere die Ausgabe
-			let ausgabe = `\n## 📈 ${aktienSymbol} Kursdaten\n`;
+			let ausgabe = `\n## 📈 ${correctedSymbol} Kursdaten\n`;
 			ausgabe += `**Zeitstempel:** ${zeitstempel}\n`;
 			ausgabe += `**Aktueller Kurs:** ${aktuellerKurs.toFixed(
 				2
@@ -177,8 +223,10 @@ async function holeAktiendaten(aktienSymbol) {
 				veraenderung >= 0 ? "+" : ""
 			}${veraenderungProzent.toFixed(2)}%)\n`;
 			ausgabe += `**Markt Status:** ${marktStatus}\n`;
-			ausgabe += `**Symbol:** ${meta.symbol}\n`;
-			ausgabe += `**Firmenname:** ${meta.longName || meta.shortName}\n`;
+			ausgabe += `**Symbol:** ${correctedSymbol}\n`;
+			ausgabe += `**Firmenname:** ${
+				meta.longName || meta.shortName || "N/A"
+			}\n`;
 
 			// Füge Trend-Emoji hinzu
 			let trendEmoji = veraenderung >= 0 ? "📈" : "📉";
@@ -192,81 +240,128 @@ async function holeAktiendaten(aktienSymbol) {
 				zeitstempel: zeitstempel,
 			};
 		} else {
+			// Erweiterte Fehlerbehandlung
+			let errorDetails = `Status: ${response.statusCode}`;
+			if (response.error) {
+				errorDetails += `, Error: ${response.error}`;
+			}
+			if (response.responseText) {
+				try {
+					let errorData = JSON.parse(response.responseText);
+					if (errorData.chart && errorData.chart.error) {
+						errorDetails += `, API Error: ${errorData.chart.error.description}`;
+					}
+				} catch (e) {
+					// Response ist kein JSON
+					errorDetails += `, Response: ${response.responseText.substring(
+						0,
+						200
+					)}`;
+				}
+			}
+
 			return {
 				erfolg: false,
-				fehler: `HTTP Fehler: ${response.statusCode} - ${response.error}`,
+				fehler: `HTTP Fehler: ${errorDetails}\n\nMögliche Lösungen:\n- Prüfen Sie das Symbol: ${correctedSymbol}\n- Versuchen Sie die alternative API\n- Symbol könnte anders geschrieben sein (z.B. ADS.DE vs ADDYY)`,
 			};
 		}
 	} catch (error) {
 		return {
 			erfolg: false,
-			fehler: `Fehler beim Abrufen der Daten: ${error.message}`,
+			fehler: `Fehler beim Abrufen der Daten: ${error.message}\n\nTipp: Versuchen Sie die alternative API`,
 		};
 	}
 }
 
-// Alternative API-Funktion (Alpha Vantage - falls Yahoo Finance nicht funktioniert)
+// Alternative API-Funktion (Finnhub - kostenlos ohne API-Key für Basis-Daten)
 async function holeAktiendatenAlternativ(aktienSymbol) {
-	// Für Alpha Vantage benötigen Sie einen kostenlosen API-Schlüssel
-	const API_KEY = "YOUR_API_KEY_HERE"; // Ersetzen Sie dies durch Ihren API-Schlüssel
-	const ALPHA_URL = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${aktienSymbol}&apikey=${API_KEY}`;
+	// Finnhub API (kostenlos für Basis-Daten)
+	let symbol = aktienSymbol.toUpperCase();
+
+	// Deutsche Aktien für Finnhub anpassen
+	if (symbol === "ADS.DE") {
+		symbol = "ADS.DE";
+	}
+
+	const FINNHUB_URL = `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=demo`;
+	console.log(`DEBUG: Alternative API URL = ${FINNHUB_URL}`);
 
 	try {
 		let http = HTTP.create();
 		let response = http.request({
-			url: ALPHA_URL,
+			url: FINNHUB_URL,
 			method: "GET",
+			headers: {
+				"User-Agent": "Mozilla/5.0 (compatible; DraftsApp/1.0)",
+			},
 		});
 
-		if (response.success) {
+		console.log(`DEBUG: Finnhub Response Status = ${response.statusCode}`);
+
+		if (response.success && response.statusCode === 200) {
 			let data = JSON.parse(response.responseText);
-			let quote = data["Global Quote"];
+			console.log(`DEBUG: Finnhub data:`, data);
 
-			if (quote) {
-				let aktuellerKurs = parseFloat(quote["05. price"]);
-				let veraenderung = parseFloat(quote["09. change"]);
-				let veraenderungProzent = parseFloat(
-					quote["10. change percent"].replace("%", "")
-				);
-
-				let zeitstempel = new Date().toLocaleString("de-DE", {
-					year: "numeric",
-					month: "2-digit",
-					day: "2-digit",
-					hour: "2-digit",
-					minute: "2-digit",
-					second: "2-digit",
-					timeZone: "Europe/Berlin",
-				});
-
-				let ausgabe = `\n## 📈 ${aktienSymbol} Kursdaten (Alpha Vantage)\n`;
-				ausgabe += `**Zeitstempel:** ${zeitstempel}\n`;
-				ausgabe += `**Aktueller Kurs:** ${aktuellerKurs.toFixed(2)} EUR\n`;
-				ausgabe += `**Veränderung:** ${
-					veraenderung >= 0 ? "+" : ""
-				}${veraenderung.toFixed(2)} EUR (${
-					veraenderung >= 0 ? "+" : ""
-				}${veraenderungProzent.toFixed(2)}%)\n`;
-				ausgabe += `**Symbol:** ${quote["01. symbol"]}\n`;
-
+			// Prüfe ob gültige Daten vorhanden sind
+			if (!data.c || data.c === 0) {
 				return {
-					erfolg: true,
-					daten: ausgabe,
-					kurs: aktuellerKurs,
-					veraenderung: veraenderung,
-					zeitstempel: zeitstempel,
+					erfolg: false,
+					fehler: `Keine Daten für Symbol ${symbol} in Finnhub gefunden`,
 				};
 			}
+
+			let aktuellerKurs = data.c; // Current price
+			let vorherSchlusskurs = data.pc; // Previous close
+			let veraenderung = aktuellerKurs - vorherSchlusskurs;
+			let veraenderungProzent = (veraenderung / vorherSchlusskurs) * 100;
+
+			let zeitstempel = new Date().toLocaleString("de-DE", {
+				year: "numeric",
+				month: "2-digit",
+				day: "2-digit",
+				hour: "2-digit",
+				minute: "2-digit",
+				second: "2-digit",
+				timeZone: "Europe/Berlin",
+			});
+
+			let ausgabe = `\n## 📈 ${symbol} Kursdaten (Finnhub)\n`;
+			ausgabe += `**Zeitstempel:** ${zeitstempel}\n`;
+			ausgabe += `**Aktueller Kurs:** ${aktuellerKurs.toFixed(2)} EUR\n`;
+			ausgabe += `**Vorheriger Schluss:** ${vorherSchlusskurs.toFixed(
+				2
+			)} EUR\n`;
+			ausgabe += `**Veränderung:** ${
+				veraenderung >= 0 ? "+" : ""
+			}${veraenderung.toFixed(2)} EUR (${
+				veraenderung >= 0 ? "+" : ""
+			}${veraenderungProzent.toFixed(2)}%)\n`;
+			ausgabe += `**Höchstkurs heute:** ${data.h.toFixed(2)} EUR\n`;
+			ausgabe += `**Tiefstkurs heute:** ${data.l.toFixed(2)} EUR\n`;
+			ausgabe += `**Eröffnungskurs:** ${data.o.toFixed(2)} EUR\n`;
+			ausgabe += `**Symbol:** ${symbol}\n`;
+
+			// Füge Trend-Emoji hinzu
+			let trendEmoji = veraenderung >= 0 ? "📈" : "📉";
+			ausgabe = ausgabe.replace("📈", trendEmoji);
+
+			return {
+				erfolg: true,
+				daten: ausgabe,
+				kurs: aktuellerKurs,
+				veraenderung: veraenderung,
+				zeitstempel: zeitstempel,
+			};
 		}
 
 		return {
 			erfolg: false,
-			fehler: "Keine Daten von Alpha Vantage erhalten",
+			fehler: `Finnhub API Fehler: Status ${response.statusCode}`,
 		};
 	} catch (error) {
 		return {
 			erfolg: false,
-			fehler: `Alpha Vantage Fehler: ${error.message}`,
+			fehler: `Finnhub Fehler: ${error.message}`,
 		};
 	}
 }
@@ -282,12 +377,18 @@ async function hauptfunktion() {
 
 	// Debug: Zeige den aktuellen Titel an
 	let title = draft.title;
-	console.log(`DEBUG: Draft-Titel = "${title}"`);
+	console.log(`DEBUG: Draft-Titel (original) = "${title}"`);
+
+	// Entferne # aus dem Titel (Markdown-Header)
+	if (title) {
+		title = title.replace(/^#+\s*/, "").trim(); // Entfernt # am Anfang und folgende Leerzeichen
+	}
+	console.log(`DEBUG: Draft-Titel (bereinigt) = "${title}"`);
 
 	// Fallback für leeren Titel
 	if (!title || title.trim() === "") {
 		alert(
-			"❌ Draft-Titel ist leer!\n\nBitte setzen Sie den Titel im Format: 'ADS.DE/min150/max250'"
+			"❌ Draft-Titel ist leer!\n\nBitte setzen Sie den Titel im Format: 'ADS.DE/min150/max250'\n(ohne # am Anfang)"
 		);
 		context.cancel();
 		return;
