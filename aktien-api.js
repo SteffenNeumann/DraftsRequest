@@ -4,97 +4,121 @@
 
 // Funktion zum Parsen des Draft-Titels
 function parseDraftTitel(titel) {
-    // Format: "ADS.DE/min150/max250"
-    const parts = titel.split('/');
-    
-    if (parts.length !== 3) {
-        return {
-            erfolg: false,
-            fehler: `Ungültiges Titel-Format. Erwartet: "SYMBOL/minWERT/maxWERT", erhalten: "${titel}"`
-        };
-    }
-    
-    const symbol = parts[0].trim();
-    const minStr = parts[1].trim();
-    const maxStr = parts[2].trim();
-    
-    // Extrahiere numerische Werte
-    const minMatch = minStr.match(/min(\d+(?:\.\d+)?)/i);
-    const maxMatch = maxStr.match(/max(\d+(?:\.\d+)?)/i);
-    
-    if (!minMatch || !maxMatch) {
-        return {
-            erfolg: false,
-            fehler: `Ungültiges Schwellenwert-Format. Verwenden Sie: min150/max250`
-        };
-    }
-    
-    const minWert = parseFloat(minMatch[1]);
-    const maxWert = parseFloat(maxMatch[1]);
-    
-    if (minWert >= maxWert) {
-        return {
-            erfolg: false,
-            fehler: `Minimum (${minWert}) muss kleiner als Maximum (${maxWert}) sein`
-        };
-    }
-    
-    return {
-        erfolg: true,
-        symbol: symbol,
-        minWert: minWert,
-        maxWert: maxWert
-    };
+	// Format: "ADS.DE/min150/max250"
+	console.log(`DEBUG: Parsing Titel = "${titel}"`);
+
+	// Entferne Leerzeichen am Anfang und Ende
+	titel = titel.trim();
+
+	const parts = titel.split("/");
+	console.log(`DEBUG: Parts = [${parts.join(", ")}]`);
+
+	if (parts.length !== 3) {
+		return {
+			erfolg: false,
+			fehler: `Ungültiges Titel-Format. Erwartet: "SYMBOL/minWERT/maxWERT", erhalten: "${titel}" (${parts.length} Teile statt 3)`,
+		};
+	}
+
+	const symbol = parts[0].trim();
+	const minStr = parts[1].trim();
+	const maxStr = parts[2].trim();
+
+	console.log(
+		`DEBUG: Symbol="${symbol}", MinStr="${minStr}", MaxStr="${maxStr}"`
+	);
+
+	// Extrahiere numerische Werte - flexiblere Regex
+	const minMatch = minStr.match(/min\s*(\d+(?:\.\d+)?)/i);
+	const maxMatch = maxStr.match(/max\s*(\d+(?:\.\d+)?)/i);
+
+	console.log(`DEBUG: MinMatch=${minMatch}, MaxMatch=${maxMatch}`);
+
+	if (!minMatch || !maxMatch) {
+		return {
+			erfolg: false,
+			fehler: `Ungültiges Schwellenwert-Format. Verwenden Sie: min150/max250\nGefunden: "${minStr}" und "${maxStr}"`,
+		};
+	}
+
+	const minWert = parseFloat(minMatch[1]);
+	const maxWert = parseFloat(maxMatch[1]);
+
+	console.log(`DEBUG: MinWert=${minWert}, MaxWert=${maxWert}`);
+
+	if (minWert >= maxWert) {
+		return {
+			erfolg: false,
+			fehler: `Minimum (${minWert}) muss kleiner als Maximum (${maxWert}) sein`,
+		};
+	}
+
+	return {
+		erfolg: true,
+		symbol: symbol,
+		minWert: minWert,
+		maxWert: maxWert,
+	};
 }
 
 // Funktion zum Setzen von Markern im Draft
 function setzeMarker(markerTyp, wert, schwellenwert) {
-    const marker = `\n🚨 **${markerTyp.toUpperCase()}-ALARM**: Kurs ${wert.toFixed(2)}€ hat Schwellenwert ${schwellenwert}€ ${markerTyp === 'minimum' ? 'unterschritten' : 'überschritten'}! ⚠️\n`;
-    return marker;
+	const marker = `\n🚨 **${markerTyp.toUpperCase()}-ALARM**: Kurs ${wert.toFixed(
+		2
+	)}€ hat Schwellenwert ${schwellenwert}€ ${
+		markerTyp === "minimum" ? "unterschritten" : "überschritten"
+	}! ⚠️\n`;
+	return marker;
 }
 
 // Funktion zum Senden einer Nachricht (Drafts Action)
 function sendeAlarmNachricht(symbol, kurs, markerTyp, schwellenwert) {
-    // Erstelle neue Nachricht
-    const nachrichtTitel = `🚨 ${symbol} ${markerTyp.toUpperCase()}-ALARM`;
-    const nachrichtInhalt = `
+	// Erstelle neue Nachricht
+	const nachrichtTitel = `🚨 ${symbol} ${markerTyp.toUpperCase()}-ALARM`;
+	const nachrichtInhalt = `
 📊 **Aktien-Alarm für ${symbol}**
 
 🚨 **${markerTyp.toUpperCase()}-Schwellenwert erreicht!**
 
 💰 **Aktueller Kurs:** ${kurs.toFixed(2)}€
 ⚠️ **Schwellenwert:** ${schwellenwert}€
-📅 **Zeitpunkt:** ${new Date().toLocaleString('de-DE', { timeZone: 'Europe/Berlin' })}
+📅 **Zeitpunkt:** ${new Date().toLocaleString("de-DE", {
+		timeZone: "Europe/Berlin",
+	})}
 
-${markerTyp === 'minimum' ? '📉 Der Kurs ist unter den Minimum-Schwellenwert gefallen!' : '📈 Der Kurs hat den Maximum-Schwellenwert überschritten!'}
+${
+	markerTyp === "minimum"
+		? "📉 Der Kurs ist unter den Minimum-Schwellenwert gefallen!"
+		: "📈 Der Kurs hat den Maximum-Schwellenwert überschritten!"
+}
 
-#aktien-alarm #${symbol.toLowerCase().replace('.', '')} #schwellenwert
+#aktien-alarm #${symbol.toLowerCase().replace(".", "")} #schwellenwert
     `.trim();
-    
-    // Erstelle neuen Draft für die Alarm-Nachricht
-    const alarmDraft = Draft.create();
-    alarmDraft.title = nachrichtTitel;
-    alarmDraft.content = nachrichtInhalt;
-    alarmDraft.addTag("aktien-alarm");
-    alarmDraft.addTag(symbol.toLowerCase().replace('.', ''));
-    alarmDraft.update();
-    
-    // Hier können Sie zusätzliche Aktionen ausführen:
-    // - E-Mail senden
-    // - Slack/Teams Nachricht
-    // - Push-Benachrichtigung
-    
-    return {
-        erfolg: true,
-        nachrichtId: alarmDraft.uuid,
-        titel: nachrichtTitel
-    };
+
+	// Erstelle neuen Draft für die Alarm-Nachricht
+	const alarmDraft = Draft.create();
+	alarmDraft.title = nachrichtTitel;
+	alarmDraft.content = nachrichtInhalt;
+	alarmDraft.addTag("aktien-alarm");
+	alarmDraft.addTag(symbol.toLowerCase().replace(".", ""));
+	alarmDraft.update();
+
+	// Hier können Sie zusätzliche Aktionen ausführen:
+	// - E-Mail senden
+	// - Slack/Teams Nachricht
+	// - Push-Benachrichtigung
+
+	return {
+		erfolg: true,
+		nachrichtId: alarmDraft.uuid,
+		titel: nachrichtTitel,
+	};
 }
 
 // Funktion zum Abrufen der Aktiendaten
 async function holeAktiendaten(aktienSymbol) {
-    const API_URL = `https://query1.finance.yahoo.com/v8/finance/chart/${aktienSymbol}`;
-    
+	const API_URL = `https://query1.finance.yahoo.com/v8/finance/chart/${aktienSymbol}`;
+
 	try {
 		// HTTP Request an Yahoo Finance API
 		let http = HTTP.create();
@@ -256,16 +280,32 @@ async function hauptfunktion() {
 		return;
 	}
 
+	// Debug: Zeige den aktuellen Titel an
+	let title = draft.title;
+	console.log(`DEBUG: Draft-Titel = "${title}"`);
+
+	// Fallback für leeren Titel
+	if (!title || title.trim() === "") {
+		alert(
+			"❌ Draft-Titel ist leer!\n\nBitte setzen Sie den Titel im Format: 'ADS.DE/min150/max250'"
+		);
+		context.cancel();
+		return;
+	}
+
 	// Parse den Draft-Titel für Symbol und Schwellenwerte
-	const titelInfo = parseDraftTitel(draft.title);
-	
+	const titelInfo = parseDraftTitel(title);
+
 	if (!titelInfo.erfolg) {
-		alert(`❌ Titel-Parsing-Fehler: ${titelInfo.fehler}\n\nErwartetes Format: "ADS.DE/min150/max250"`);
+		alert(
+			`❌ Titel-Parsing-Fehler: ${titelInfo.fehler}\n\nAktueller Titel: "${title}"\nErwartetes Format: "ADS.DE/min150/max250"`
+		);
 		context.cancel();
 		return;
 	}
 
 	const { symbol, minWert, maxWert } = titelInfo;
+	console.log(`DEBUG: Symbol = ${symbol}, Min = ${minWert}, Max = ${maxWert}`);
 
 	// Zeige Ladeanzeige
 	let loadingPrompt = Prompt.create();
@@ -286,9 +326,14 @@ async function hauptfunktion() {
 			// Minimum-Schwellenwert unterschritten
 			const marker = setzeMarker("minimum", aktuellerKurs, minWert);
 			zusaetzlicheAusgabe += marker;
-			
+
 			// Sende Alarm-Nachricht
-			const nachrichtErgebnis = sendeAlarmNachricht(symbol, aktuellerKurs, "minimum", minWert);
+			const nachrichtErgebnis = sendeAlarmNachricht(
+				symbol,
+				aktuellerKurs,
+				"minimum",
+				minWert
+			);
 			if (nachrichtErgebnis.erfolg) {
 				markersGesetzt.push(`Minimum-Alarm (${nachrichtErgebnis.titel})`);
 			}
@@ -298,9 +343,14 @@ async function hauptfunktion() {
 			// Maximum-Schwellenwert überschritten
 			const marker = setzeMarker("maximum", aktuellerKurs, maxWert);
 			zusaetzlicheAusgabe += marker;
-			
+
 			// Sende Alarm-Nachricht
-			const nachrichtErgebnis = sendeAlarmNachricht(symbol, aktuellerKurs, "maximum", maxWert);
+			const nachrichtErgebnis = sendeAlarmNachricht(
+				symbol,
+				aktuellerKurs,
+				"maximum",
+				maxWert
+			);
 			if (nachrichtErgebnis.erfolg) {
 				markersGesetzt.push(`Maximum-Alarm (${nachrichtErgebnis.titel})`);
 			}
@@ -314,7 +364,11 @@ async function hauptfunktion() {
 
 		// Erfolg: Daten an Draft anhängen
 		let aktuellerInhalt = draft.content;
-		let neuerInhalt = aktuellerInhalt + ergebnis.daten + schwellenwertInfo + zusaetzlicheAusgabe;
+		let neuerInhalt =
+			aktuellerInhalt +
+			ergebnis.daten +
+			schwellenwertInfo +
+			zusaetzlicheAusgabe;
 
 		draft.content = neuerInhalt;
 		draft.update();
@@ -324,16 +378,17 @@ async function hauptfunktion() {
 		successPrompt.title = "✅ Aktiendaten aktualisiert";
 		let nachricht = `${symbol}: ${ergebnis.kurs.toFixed(2)}€\nVeränderung: ${
 			ergebnis.veraenderung >= 0 ? "+" : ""
-		}${ergebnis.veraenderung.toFixed(2)}€\nZeit: ${ergebnis.zeitstempel}\n\nSchwellenwerte: ${minWert}€ - ${maxWert}€`;
-		
+		}${ergebnis.veraenderung.toFixed(2)}€\nZeit: ${
+			ergebnis.zeitstempel
+		}\n\nSchwellenwerte: ${minWert}€ - ${maxWert}€`;
+
 		if (markersGesetzt.length > 0) {
-			nachricht += `\n\n🚨 ALARME AUSGELÖST:\n${markersGesetzt.join('\n')}`;
+			nachricht += `\n\n🚨 ALARME AUSGELÖST:\n${markersGesetzt.join("\n")}`;
 		}
 
 		successPrompt.message = nachricht;
 		successPrompt.addButton("OK");
 		successPrompt.show();
-
 	} else {
 		// Fehler: Zeige Fehlermeldung
 		let errorPrompt = Prompt.create();
@@ -356,17 +411,26 @@ async function hauptfunktion() {
 					let zusaetzlicheAusgabe = "";
 
 					if (aktuellerKurs <= minWert) {
-						zusaetzlicheAusgabe += setzeMarker("minimum", aktuellerKurs, minWert);
+						zusaetzlicheAusgabe += setzeMarker(
+							"minimum",
+							aktuellerKurs,
+							minWert
+						);
 						sendeAlarmNachricht(symbol, aktuellerKurs, "minimum", minWert);
 					}
 
 					if (aktuellerKurs >= maxWert) {
-						zusaetzlicheAusgabe += setzeMarker("maximum", aktuellerKurs, maxWert);
+						zusaetzlicheAusgabe += setzeMarker(
+							"maximum",
+							aktuellerKurs,
+							maxWert
+						);
 						sendeAlarmNachricht(symbol, aktuellerKurs, "maximum", maxWert);
 					}
 
 					let aktuellerInhalt = draft.content;
-					let neuerInhalt = aktuellerInhalt + alternativErgebnis.daten + zusaetzlicheAusgabe;
+					let neuerInhalt =
+						aktuellerInhalt + alternativErgebnis.daten + zusaetzlicheAusgabe;
 
 					draft.content = neuerInhalt;
 					draft.update();
